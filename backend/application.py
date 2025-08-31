@@ -10,10 +10,10 @@ import PyPDF2
 from io import BytesIO
 import fitz  # PyMuPDF - alternative PDF parser
 
-app = Flask(__name__)
+application = Flask(__name__)
 
 # Enable CORS for all routes and origins
-CORS(app, origins=["http://localhost:3000", "http://127.0.0.1:3000"])
+CORS(application, origins=["*"]) 
 
 # Store downloaded paper content in memory (in production, use a database)
 paper_content_cache = {}
@@ -201,7 +201,7 @@ def get_mock_papers_for_query(query, max_results):
     
     return relevant_papers[:max_results]
 
-@app.route('/search', methods=['GET', 'POST'])
+@application.route('/search', methods=['GET', 'POST'])
 def search():
     """Main search endpoint"""
     try:
@@ -236,7 +236,7 @@ def search():
             'timestamp': datetime.now().isoformat()
         }), 500
 
-@app.route('/download-paper/<paper_id>', methods=['POST'])
+@application.route('/download-paper/<paper_id>', methods=['POST'])
 def download_paper(paper_id):
     """Download and cache the full text of a paper"""
     try:
@@ -289,7 +289,7 @@ def download_paper(paper_id):
             'error': str(e)
         }), 500
 
-@app.route('/paper-content/<paper_id>', methods=['GET'])
+@application.route('/paper-content/<paper_id>', methods=['GET'])
 def get_paper_content(paper_id):
     """Get cached paper content for AI questioning"""
     try:
@@ -319,7 +319,7 @@ def get_paper_content(paper_id):
             'error': str(e)
         }), 500
 
-@app.route('/ask-paper/<paper_id>', methods=['POST'])
+@application.route('/ask-paper/<paper_id>', methods=['POST'])
 def ask_paper_question(paper_id):
     """Answer questions about a specific paper using its full content"""
     try:
@@ -367,7 +367,7 @@ def ask_paper_question(paper_id):
             'error': str(e)
         }), 500
 
-@app.route('/papers', methods=['GET'])
+@application.route('/papers', methods=['GET'])
 def get_papers():
     """Legacy papers endpoint"""
     query = request.args.get('query', 'computer science')
@@ -376,7 +376,7 @@ def get_papers():
     papers = fetch_arxiv_papers_simple(query, max_results)
     return jsonify(papers)
 
-@app.route('/cache-status', methods=['GET'])
+@application.route('/cache-status', methods=['GET'])
 def cache_status():
     """Get information about cached papers"""
     cache_info = {}
@@ -391,7 +391,7 @@ def cache_status():
         'papers': cache_info
     })
 
-@app.route('/', methods=['GET'])
+@application.route('/', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
@@ -423,4 +423,4 @@ if __name__ == '__main__':
     print("📦 Make sure you have installed: pip install PyPDF2 PyMuPDF")
     print("-" * 50)
     
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    application.run(debug=True, host='0.0.0.0', port=8000)
