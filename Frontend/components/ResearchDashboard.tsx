@@ -551,60 +551,83 @@ export default function ResearchDashboard() {
   }
 
   const downloadPaper = async (paper: Paper) => {
-    if (downloadStatus[paper.id]?.isDownloading) return
+    if (downloadStatus[paper.id]?.isDownloading) return;
 
     setDownloadStatus(prev => ({
-      ...prev,
-      [paper.id]: {
-        isDownloading: true,
-        hasFullText: false
-      }
-    }))
-
-    try {
-      console.log(`Downloading paper: ${paper.title}`)
-      const response = await fetch(`http://127.0.0.1:8000/download-paper/${paper.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          link: paper.link
-        })
-      })
-
-      const result = await response.json()
-
-      if (result.success) {
-        setDownloadStatus(prev => ({
-          ...prev,
-          [paper.id]: {
-            isDownloading: false,
-            hasFullText: true,
-            textLength: result.text_length
-          }
-        }))
-
-        setPapers(prev => prev.map(p =>
-          p.id === paper.id ? { ...p, has_full_text: true } : p
-        ))
-
-        console.log(`Successfully downloaded paper: ${paper.title}`)
-      } else {
-        throw new Error(result.error || 'Download failed')
-      }
-    } catch (error) {
-      console.error('Download error:', error)
-      setDownloadStatus(prev => ({
         ...prev,
         [paper.id]: {
-          isDownloading: false,
-          hasFullText: false,
-          error: error instanceof Error ? error.message : 'Download failed'
+            isDownloading: true,
+            hasFullText: false,
         }
-      }))
+    }));
+
+    try {
+        console.log(`Downloading paper: ${paper.title}`);
+        const response = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/download-paper/${paper.id}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                link: paper.link
+            })
+        });
+
+        // Check if the response is a file download
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/pdf')) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${paper.title}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+
+            setDownloadStatus(prev => ({
+                ...prev,
+                [paper.id]: {
+                    isDownloading: false,
+                    hasFullText: false, // It is a download, not a full text for analysis
+                }
+            }));
+            console.log(`Successfully downloaded PDF: ${paper.title}`);
+            return; // Exit the function to prevent further processing
+        }
+        
+        // If not a PDF, continue to handle as JSON response from the API
+        const result = await response.json();
+
+        if (result.success) {
+            setDownloadStatus(prev => ({
+                ...prev,
+                [paper.id]: {
+                    isDownloading: false,
+                    hasFullText: true,
+                    textLength: result.text_length,
+                }
+            }));
+            setPapers(prev => prev.map(p =>
+                p.id === paper.id ? { ...p, has_full_text: true } : p
+            ));
+            console.log(`Successfully extracted and cached text: ${paper.title}`);
+        } else {
+            throw new Error(result.error || 'Download failed');
+        }
+    } catch (error) {
+        console.error('Download error:', error);
+        setDownloadStatus(prev => ({
+            ...prev,
+            [paper.id]: {
+                isDownloading: false,
+                hasFullText: false,
+                error: error instanceof Error ? error.message : 'Download failed',
+            }
+        }));
     }
-  }
+};
 
   const downloadAllPapers = useCallback(async () => {
     console.log("Starting batch download of all papers...")
@@ -632,7 +655,7 @@ export default function ResearchDashboard() {
   const fetchPapersForQuery = useCallback(async (query: string) => {
     try {
       console.log(`Fetching papers for: ${query}`)
-      const res = await fetch(`http://127.0.0.1:8000/search?query=${encodeURIComponent(query)}&max_results=6`)
+      const res = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/search?query=${encodeURIComponent(query)}&max_results=6`)
       if (!res.ok) {
         console.error(`HTTP error for ${query}: ${res.status}`)
         return []
@@ -709,7 +732,7 @@ export default function ResearchDashboard() {
 
   const askGeminiWithFullText = async (question: string, paper: Paper) => {
     try {
-      const backendResponse = await fetch(`http://127.0.0.1:8000/ask-paper/${paper.id}`, {
+      const backendResponse = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/ask-paper/${paper.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, paper_info: { title: paper.title, authors: paper.authors, institution: paper.institution } })
