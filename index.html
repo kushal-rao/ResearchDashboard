@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Explorer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom styles for animations and tweaks */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .line-clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+        .line-clamp-4 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+        /* Custom animation for chat loading dots */
+        @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1.0); } }
+        .animate-bounce-custom .dot { animation: bounce 1.4s infinite ease-in-out both; }
+        .animate-bounce-custom .dot:nth-child(1) { animation-delay: -0.32s; }
+        .animate-bounce-custom .dot:nth-child(2) { animation-delay: -0.16s; }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+    <div id="app-container"></div>
+
+    <div id="modal-container"></div>
+
+
+<script>
+// =================================================================================
+// JAVASCRIPT IMPLEMENTATION (v2 - with Full Functionality Simulation)
+// =================================================================================
+document.addEventListener('DOMContentLoaded', () => {
+
+    // =================================================================================
+    // CONFIGURATION & STATE
+    // =================================================================================
+
+    // !!! ACTION REQUIRED: Replace with your Google Gemini API Key !!!
+    const GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE";
+
+    // --- SIMULATION NOTE ---
+    // The original backend downloaded and processed PDFs. This is not possible in a browser
+    // due to security restrictions (CORS). This script *simulates* that functionality.
+    // The `downloadPaper` function will pretend to download the paper and will cache the
+    // paper's ABSTRACT as if it were the full text. This allows the entire UI, including
+    // download statuses and the AI chat context, to work exactly like the original.
+
+    // Global state variables to replace React's useState
+    let state = {
+        papers: [],
+        selectedPaper: null,
+        loading: true,
+        chatMessages: [],
+        currentMessage: "",
+        isLoadingResponse: false,
+        showChat: false,
+        showPdfViewer: false,
+        downloadStatus: {}, // Tracks { isDownloading, hasFullText, error, textLength }
+        autoDownloadEnabled: false,
+    };
+    
+    // This object will store the paper's abstract after a simulated download.
+    const paperContentCache = {};
+
+    const INSTITUTIONS = [ "Google", "Microsoft", "Meta", "Apple", "Amazon", "OpenAI", "Anthropic", "NVIDIA", "Intel", "IBM", "Tesla", "DeepMind", "MIT", "Stanford", "Carnegie Mellon", "UC Berkeley", "Harvard", "Princeton", "Caltech", "University of Washington", "Georgia Tech", "Cornell", "Yale", "Columbia", "NYU", "University of Chicago", "Johns Hopkins", "UCLA", "University of Michigan", "UT Austin", "UIUC", "University of Pennsylvania", "Duke", "Northwestern", "Oxford", "Cambridge", "ETH Zurich", "University of Toronto", "McGill", "Technical University of Munich", "Imperial College London", "University College London", "King's College London", "Sorbonne", "Tsinghua University", "Peking University", "University of Tokyo", "Kyoto University", "Seoul National University", "KAIST", "National University of Singapore", "Nanyang Technological University", "Australian National University", "University of Melbourne", "University of Sydney", "Hebrew University", "Technion", "Weizmann Institute" ];
+    const RESEARCH_QUERIES = [ "computer architecture", "machine learning", "artificial intelligence", "quantum computing", "distributed systems", "neural networks" ];
+
+    // =================================================================================
+    // HELPER & UTILITY FUNCTIONS
+    // =================================================================================
+    const formatDate = (dateString) => new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    const extractInstitution = (authors, title, summary) => INSTITUTIONS.find(inst => `${authors.join(' ')} ${title} ${summary}`.toLowerCase().includes(inst.toLowerCase())) || "Research Institution";
+    const extractSource = (link) => { try { const u = new URL(link).hostname.replace('www.', ''); return u.includes('arxiv.org') ? 'arXiv' : u.split('.')[0]; } catch { return 'Unknown'; } };
+    const getPdfUrl = (paper) => paper.link.includes('arxiv.org/abs/') ? paper.link.replace('/abs/', '/pdf/') + '.pdf' : paper.link;
+
+    // =================================================================================
+    // API & SIMULATION FUNCTIONS
+    // =================================================================================
+
+    /**
+     * Fetches paper metadata from the public arXiv API.
+     */
+    async function fetchArxivPapers(query, max_results = 6) {
+        const url = `https://export.arxiv.org/api/query?search_query=all:${query}&start=0&max_results=${max_results}&sortBy=submittedDate&sortOrder=descending`;
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+            
+            const xmlText = await response.text();
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+            const entries = xmlDoc.getElementsByTagName("entry");
+            
+            return Array.from(entries).map(entry => {
+                const title = entry.querySelector("title")?.textContent.trim().replace(/\s+/g, ' ') || 'N/A';
+                const summary = entry.querySelector("summary")?.textContent.trim().replace(/\s+/g, ' ') || 'N/A';
+                const published = entry.querySelector("published")?.textContent || new Date().toISOString();
+                const link = entry.querySelector("id")?.textContent || '#';
+                const authors = Array.from(entry.querySelectorAll("author name")).map(a => a.textContent);
+                const id = link.split('/').pop();
+
+                return { id, title, authors, summary, link, published, has_full_text: false, category: query, institution: extractInstitution(authors, title, summary), source: extractSource(link) };
+            });
+        } catch (error) {
+            console.error(`Error fetching papers for ${query}:`, error);
+            return [];
+        }
+    }
+
+    /**
+     * Calls the Gemini API to answer a question about a paper.
+     */
+    async function askGemini(question, paper) {
+        if (!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
+            return "Error: Gemini API key is not configured. Please add your key to the script.";
+        }
+        
+        const status = state.downloadStatus[paper.id] || {};
+        const hasFullText = status.hasFullText;
+        const context = hasFullText ? paperContentCache[paper.id] : paper.summary;
+        const contextType = hasFullText ? "full paper content" : "abstract";
+
+        const prompt = `Based on the following research paper ${contextType}, answer the user's question.
+        Paper Title: "${paper.title}"
+        ${contextType === "abstract" ? "Abstract" : "Content"}: "${context}"
+        User Question: ${question}
+        Provide a helpful, brief answer.`;
+        
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            });
+            if (!response.ok) throw new Error(`API error ${response.status}`);
+            
+            const data = await response.json();
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+            return text ? `${text}\n\n📄 *Note: Response based on ${contextType}.*` : "Sorry, I received an empty response.";
+        } catch (error) {
+            console.error('Error calling Gemini API:', error);
+            return "Sorry, I couldn't process your question right now.";
+        }
+    }
+
+    // =================================================================================
+    // CORE LOGIC (Replaces React hooks and handlers)
+    // =================================================================================
+
+    /**
+     * SIMULATES downloading and processing a paper PDF.
+     */
+    async function downloadPaper(paper) {
+        if (state.downloadStatus[paper.id]?.isDownloading || state.downloadStatus[paper.id]?.hasFullText) return;
+
+        // 1. Set status to downloading and re-render
+        state.downloadStatus[paper.id] = { isDownloading: true, hasFullText: false };
+        rerenderApp();
+
+        // 2. Simulate network delay and processing
+        await new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 1000));
+
+        // 3. On "success", cache the abstract and update status
+        paperContentCache[paper.id] = paper.summary; // Cache abstract as "full text"
+        state.downloadStatus[paper.id] = {
+            isDownloading: false,
+            hasFullText: true,
+            textLength: paper.summary.length
+        };
+        // Also update the main paper object
+        const paperInState = state.papers.find(p => p.id === paper.id);
+        if (paperInState) paperInState.has_full_text = true;
+
+        rerenderApp();
+    }
+
+    async function downloadAllPapers() {
+        const papersToDownload = state.papers.filter(p => !state.downloadStatus[p.id]?.hasFullText && !state.downloadStatus[p.id]?.isDownloading);
+        for (const paper of papersToDownload) {
+            // No need to await, let them run in parallel to speed it up
+            downloadPaper(paper);
+        }
+    }
+
+    async function handleSendMessage() {
+        const chatInput = document.getElementById('chat-input');
+        const question = chatInput.value.trim();
+        if (!question || !state.selectedPaper || state.isLoadingResponse) return;
+
+        state.chatMessages.push({ id: Date.now(), text: question, isUser: true, timestamp: new Date() });
+        state.isLoadingResponse = true;
+        chatInput.value = '';
+        rerenderApp(); // Render user message and loading indicator
+        
+        const responseText = await askGemini(question, state.selectedPaper);
+
+        state.chatMessages.push({ id: Date.now() + 1, text: responseText, isUser: false, timestamp: new Date() });
+        state.isLoadingResponse = false;
+        rerenderApp(); // Render AI response
+    }
+    
+    function openModal(paper) {
+        state.selectedPaper = paper;
+        state.chatMessages = [];
+        state.showChat = false;
+        state.showPdfViewer = false;
+        rerenderApp();
+    }
+
+    function closeModal() {
+        state.selectedPaper = null;
+        document.body.style.overflow = 'unset';
+        rerenderApp();
+    }
+
+    // =================================================================================
+    // UI RENDERING FUNCTIONS (Replaces React Components)
+    // =================================================================================
+
+    /** Rerenders the necessary parts of the UI based on the current state */
+    function rerenderApp() {
+        const appContainer = document.getElementById('app-container');
+        const modalContainer = document.getElementById('modal-container');
+        
+        // Only render the main dashboard if there's no modal open
+        if (!state.selectedPaper) {
+             appContainer.innerHTML = renderDashboard();
+             addDashboardEventListeners();
+        } else {
+             document.body.style.overflow = 'hidden';
+        }
+        
+        modalContainer.innerHTML = renderModal();
+        if (state.selectedPaper) addModalEventListeners();
+
+        lucide.createIcons(); // IMPORTANT: Render icons after every DOM update
+    }
+
+    function renderDashboard() {
+        if (state.loading) {
+            return `<div class="min-h-screen flex items-center justify-center text-center"><div>
+                <div class="animate-spin rounded-full h-16 w-16 border-b-2 border-black mx-auto mb-4"></div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-2">Loading Research Papers...</h2>
+            </div></div>`;
+        }
+
+        const downloadedCount = Object.values(state.downloadStatus).filter(s => s.hasFullText).length;
+        const downloadingCount = Object.values(state.downloadStatus).filter(s => s.isDownloading).length;
+        const papersToDownloadCount = state.papers.filter(p => !state.downloadStatus[p.id]?.hasFullText && !state.downloadStatus[p.id]?.isDownloading).length;
+        const progressPercent = state.papers.length > 0 ? (downloadedCount / state.papers.length) * 100 : 0;
+        
+        return `
+        <div class="max-w-7xl mx-auto px-6 py-12">
+            <div class="text-center mb-12">
+                <h1 class="text-5xl md:text-6xl font-bold text-black mb-4">Research Explorer</h1>
+                <p class="text-lg md:text-xl text-gray-800 max-w-3xl mx-auto font-medium">Discover cutting-edge research. Download papers and ask detailed questions with AI analysis.</p>
+                <div class="mt-6 flex items-center justify-center gap-2 md:gap-4 flex-wrap">
+                    <div class="text-sm font-semibold bg-black text-white px-4 py-2 rounded-full">${state.papers.length} Papers</div>
+                    <div class="text-sm font-semibold bg-green-600 text-white px-4 py-2 rounded-full">${downloadedCount} Full Text</div>
+                    <div class="text-sm font-semibold bg-blue-600 text-white px-4 py-2 rounded-full">${downloadingCount} Downloading</div>
+                </div>
+
+                <div class="mt-8 p-6 bg-white rounded-2xl shadow-lg border-2 border-gray-200 max-w-4xl mx-auto">
+                    <div class="flex items-center justify-between mb-4 flex-wrap gap-4">
+                        <h3 class="text-xl font-bold text-gray-900">Bulk Actions</h3>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm text-gray-600">Auto-download:</span>
+                            <button id="toggle-auto-download-btn" class="px-4 py-2 rounded-lg font-medium text-sm transition-colors ${state.autoDownloadEnabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">
+                                ${state.autoDownloadEnabled ? 'Enabled' : 'Disabled'}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <button id="download-all-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg flex items-center justify-center font-bold disabled:bg-gray-400">
+                            <i data-lucide="zap" class="w-5 h-5 mr-2"></i> Download All (${papersToDownloadCount})
+                        </button>
+                        <div class="p-3 bg-gray-50 rounded-lg">
+                             <div class="text-sm text-gray-600 mb-1 text-center">Download Progress</div>
+                             <div class="w-full bg-gray-200 rounded-full h-2.5"><div class="bg-green-600 h-2.5 rounded-full" style="width: ${progressPercent}%"></div></div>
+                             <div class="text-xs text-gray-500 mt-1 text-center">${downloadedCount} / ${state.papers.length} papers</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                ${state.papers.map(renderPaperWidget).join('')}
+            </div>
+        </div>`;
+    }
+
+    function renderPaperWidget(paper) {
+        const status = state.downloadStatus[paper.id] || {};
+        const hasFullText = status.hasFullText || paper.has_full_text;
+        
+        let statusBadge = '';
+        if (status.isDownloading) {
+            statusBadge = `<div class="flex items-center text-xs text-blue-700 bg-blue-100 px-2 py-1 rounded-full font-bold">
+                <div class="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-600 mr-1"></div> Downloading...
+            </div>`;
+        } else if (hasFullText) {
+            statusBadge = `<div class="flex items-center text-xs text-green-700 bg-green-100 px-2 py-1 rounded-full font-bold">
+                <i data-lucide="file-text" class="w-3 h-3 mr-1"></i> Full Text
+            </div>`;
+        }
+
+        return `
+        <div data-id="${paper.id}" class="paper-widget bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border-2 border-gray-200 hover:border-black overflow-hidden cursor-pointer group">
+            <div class="p-6">
+                <div class="flex items-start justify-between mb-4 flex-wrap gap-2">
+                    <span class="inline-block px-3 py-1 bg-black text-white text-xs font-bold rounded-full">${paper.category}</span>
+                    <div class="flex items-center gap-2">${statusBadge}</div>
+                </div>
+                <h3 class="font-bold text-xl mb-3 line-clamp-3">${paper.title}</h3>
+                <div class="flex items-center mb-3 text-sm font-medium text-gray-700">
+                    <i data-lucide="user" class="w-4 h-4 mr-2 flex-shrink-0"></i>
+                    <span class="truncate">${paper.authors.slice(0, 2).join(", ")}${paper.authors.length > 2 ? ` +${paper.authors.length - 2}` : ''}</span>
+                </div>
+                <p class="text-gray-600 text-sm line-clamp-4 mb-4">${paper.summary}</p>
+                 <button class="bg-black hover:bg-gray-800 text-white w-full px-6 py-3 rounded-lg transition-all duration-200 flex items-center justify-center text-sm font-bold shadow-lg">
+                    <i data-lucide="book-open" class="w-4 h-4 mr-2"></i> Read & Ask AI
+                </button>
+            </div>
+        </div>`;
+    }
+
+    function renderModal() {
+        if (!state.selectedPaper) return '';
+        
+        const paper = state.selectedPaper;
+        const status = state.downloadStatus[paper.id] || {};
+        const hasFullText = status.hasFullText || paper.has_full_text;
+
+        const chatMessagesHTML = state.chatMessages.map(msg => `
+            <div class="flex ${msg.isUser ? 'justify-end' : 'justify-start'}">
+                <div class="max-w-[80%] p-3 rounded-lg ${msg.isUser ? 'bg-blue-600 text-white' : 'bg-white border text-gray-800'}">
+                    <p class="text-sm whitespace-pre-wrap">${msg.text}</p>
+                    <p class="text-xs mt-1 ${msg.isUser ? 'text-blue-100' : 'text-gray-500'}">${msg.timestamp.toLocaleTimeString()}</p>
+                </div>
+            </div>`).join('');
+        
+        return `
+        <div id="modal-backdrop" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl max-w-7xl w-full max-h-[95vh] h-full overflow-hidden shadow-2xl flex">
+                <div class="flex-1 overflow-y-auto">
+                    <div class="sticky top-0 bg-black text-white px-8 py-6 flex items-center justify-between z-10">
+                        <div class="flex items-center gap-3">
+                            <i data-lucide="book-open" class="w-6 h-6"></i><span class="text-lg font-bold">Research Paper</span>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <button id="toggle-pdf-btn" title="View PDF" class="p-2 rounded-full hover:bg-white/20"><i data-lucide="eye" class="w-5 h-5"></i></button>
+                            <button id="close-modal-btn" class="p-1 rounded-full hover:bg-white/20"><i data-lucide="x" class="w-6 h-6"></i></button>
+                        </div>
+                    </div>
+                    <div class="p-8">
+                        <h1 class="text-3xl font-bold mb-6">${paper.title}</h1>
+                        <div class="mb-6 p-4 bg-gray-50 rounded-xl border-l-4 border-gray-800">
+                            <h3 class="font-bold text-lg flex items-center mb-2"><i data-lucide="user" class="w-5 h-5 mr-2"></i> Authors</h3>
+                            <div>${paper.authors.join(", ")}</div>
+                        </div>
+
+                        <div class="mb-6 p-4 bg-blue-50 rounded-xl border-l-4 border-blue-500">
+                            <h3 class="font-bold text-lg flex items-center mb-3"><i data-lucide="download" class="w-5 h-5 mr-2"></i> Full Paper Access</h3>
+                            ${!hasFullText && !status.isDownloading ? `
+                                <p class="text-sm text-blue-700 mb-3">Download the paper to enable AI analysis based on its full content.</p>
+                                <button id="download-paper-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg flex items-center font-bold">
+                                    <i data-lucide="download" class="w-4 h-4 mr-2"></i> Download & Process
+                                </button>` : ''}
+                            ${status.isDownloading ? `<div class="flex items-center text-blue-700"><div class="animate-spin rounded-full h-4 w-4 border-b-2 mr-3"></div>Processing...</div>` : ''}
+                            ${hasFullText ? `<div class="flex items-center text-green-700 font-medium"><i data-lucide="check-circle" class="w-4 h-4 mr-2"></i>Full text available for AI analysis.</div>` : ''}
+                        </div>
+                        
+                        <div class="p-6 bg-gray-50 rounded-xl border-l-4 border-black">
+                             <h3 class="font-bold text-xl flex items-center mb-4"><i data-lucide="book-open" class="w-6 h-6 mr-2"></i> Abstract</h3>
+                             <p class="leading-relaxed">${paper.summary}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="right-pane" class="w-full md:w-2/5 border-l flex flex-col bg-white flex-shrink-0">
+                    ${ state.showPdfViewer ? `
+                        <div class="bg-gray-800 text-white px-4 py-3 flex items-center justify-between"><span class="font-medium">PDF Viewer</span><button id="close-pdf-btn" class="p-1 hover:bg-gray-700 rounded"><i data-lucide="x" class="w-4 h-4"></i></button></div>
+                        <iframe src="${getPdfUrl(paper)}" class="w-full h-full border-none"></iframe>
+                    ` : `
+                        <div class="bg-blue-600 text-white px-6 py-4 flex items-center gap-3">
+                            <i data-lucide="bot" class="w-5 h-5"></i>
+                            <div><span class="font-bold">Ask about this paper</span><span class="text-xs text-blue-200 block">${hasFullText ? 'Using full paper content' : 'Using abstract only'}</span></div>
+                        </div>
+                        <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+                            ${state.chatMessages.length === 0 ? `<div class="text-center text-gray-500 py-8"><i data-lucide="bot" class="w-12 h-12 mx-auto mb-4 text-gray-400"></i>Ask me anything!</div>` : chatMessagesHTML}
+                            ${state.isLoadingResponse ? `<div class="flex justify-start"><div class="p-3"><div class="flex items-center gap-2 animate-bounce-custom"><div class="w-2 h-2 bg-gray-400 rounded-full dot"></div><div class="w-2 h-2 bg-gray-400 rounded-full dot"></div><div class="w-2 h-2 bg-gray-400 rounded-full dot"></div></div></div></div>` : ''}
+                        </div>
+                        <div class="p-4 border-t bg-white">
+                            <div class="flex gap-2">
+                                <textarea id="chat-input" rows="2" class="flex-1 p-3 border rounded-lg resize-none text-sm" placeholder="Ask a question..."></textarea>
+                                <button id="send-chat-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:bg-gray-400"><i data-lucide="send" class="w-4 h-4"></i></button>
+                            </div>
+                        </div>
+                    `}
+                </div>
+            </div>
+        </div>`;
+    }
+    
+    // =================================================================================
+    // EVENT LISTENER ATTACHMENT
+    // =================================================================================
+
+    function addDashboardEventListeners() {
+        document.querySelectorAll('.paper-widget').forEach(widget => {
+            widget.addEventListener('click', () => openModal(state.papers.find(p => p.id === widget.dataset.id)));
+        });
+        document.getElementById('toggle-auto-download-btn')?.addEventListener('click', () => {
+             state.autoDownloadEnabled = !state.autoDownloadEnabled;
+             if(state.autoDownloadEnabled) downloadAllPapers();
+             rerenderApp();
+        });
+        document.getElementById('download-all-btn')?.addEventListener('click', downloadAllPapers);
+    }
+
+    function addModalEventListeners() {
+        document.getElementById('modal-backdrop')?.addEventListener('click', e => { if (e.target.id === 'modal-backdrop') closeModal() });
+        document.getElementById('close-modal-btn')?.addEventListener('click', closeModal);
+        document.getElementById('toggle-pdf-btn')?.addEventListener('click', () => { state.showPdfViewer = true; rerenderApp(); });
+        document.getElementById('close-pdf-btn')?.addEventListener('click', () => { state.showPdfViewer = false; rerenderApp(); });
+        document.getElementById('download-paper-btn')?.addEventListener('click', () => downloadPaper(state.selectedPaper));
+        const chatInput = document.getElementById('chat-input');
+        chatInput?.addEventListener('keypress', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } });
+        document.getElementById('send-chat-btn')?.addEventListener('click', handleSendMessage);
+    }
+    
+    // =================================================================================
+    // INITIALIZATION
+    // =================================================================================
+
+    async function initializeApp() {
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal() });
+
+        const paperPromises = RESEARCH_QUERIES.map(query => fetchArxivPapers(query));
+        const allPapers = (await Promise.all(paperPromises)).flat();
+        
+        state.papers = allPapers.filter((p, i, self) => i === self.findIndex(t => t.link === p.link)).sort(() => 0.5 - Math.random());
+        state.loading = false;
+        
+        if (state.autoDownloadEnabled) {
+            setTimeout(downloadAllPapers, 1000); // Auto-download after a short delay
+        }
+        
+        rerenderApp();
+    }
+
+    initializeApp();
+});
+</script>
+
+</body>
+</html>

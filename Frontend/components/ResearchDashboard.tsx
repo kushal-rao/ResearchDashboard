@@ -64,10 +64,10 @@ const renderLatex = (text: string) => {
     .replace(/\$\$([^$]+)\$\$/g, '<span class="font-mono bg-gray-100 px-1 rounded">$1</span>') // Display math
     .replace(/\$([^$]+)\$/g, '<span class="font-mono bg-gray-100 px-1 rounded">$1</span>')    // Inline math
     .replace(/\\textbf\{([^}]+)\}/g, '<strong>$1</strong>') // Bold
-    .replace(/\\textit\{([^}]+)\}/g, '<em>$1</em>')       // Italic
-    .replace(/\\emph\{([^}]+)\}/g, '<em>$1</em>')         // Emphasis
-    .replace(/\\cite\{([^}]+)\}/g, '[$1]')               // Citations
-    .replace(/\\ref\{([^}]+)\}/g, '($1)')                 // References
+    .replace(/\\textit\{([^}]+)\}/g, '<em>$1</em>')        // Italic
+    .replace(/\\emph\{([^}]+)\}/g, '<em>$1</em>')          // Emphasis
+    .replace(/\\cite\{([^}]+)\}/g, '[$1]')                 // Citations
+    .replace(/\\ref\{([^}]+)\}/g, '($1)')                  // References
 }
 
 // =================================================================================
@@ -188,7 +188,7 @@ const PdfViewer = ({ paper, getPdfUrl, setShowPdfViewer }: { paper: Paper, getPd
   )
 }
 
-const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfViewer, showChat, setShowChat, chatMessages, currentMessage, setCurrentMessage, isLoadingResponse, handleSendMessage, handleKeyPress, downloadPaper, getPdfUrl }: any) => {
+const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfViewer, showChat, setShowChat, chatMessages, currentMessage, setCurrentMessage, isLoadingResponse, handleSendMessage, handleKeyPress, downloadPaper, getPdfUrl }: { paper: Paper, onClose: () => void, downloadStatus: PaperDownloadStatus, showPdfViewer: boolean, setShowPdfViewer: (show: boolean) => void, showChat: boolean, setShowChat: (show: boolean) => void, chatMessages: ChatMessage[], currentMessage: string, setCurrentMessage: (msg: string) => void, isLoadingResponse: boolean, handleSendMessage: () => Promise<void>, handleKeyPress: (e: React.KeyboardEvent) => void, downloadPaper: (paper: Paper) => Promise<void>, getPdfUrl: (paper: Paper) => string }) => {
   const status = downloadStatus[paper.id]
   const hasFullText = status?.hasFullText || paper.has_full_text
 
@@ -288,7 +288,7 @@ const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfV
                       className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-all duration-200 flex items-center font-bold shadow-lg"
                     >
                       <Download className="w-4 h-4 mr-2" />
-                      Download PDF & Extract Text
+                      Download PDF &amp; Extract Text
                     </button>
                   </div>
                 )}
@@ -398,25 +398,25 @@ const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfV
                     {hasFullText ? (
                       <>
                         <p>✅ Full text available - ask detailed questions!</p>
-                        <p>Try: "What methodology did they use?"</p>
+                        <p>Try: &quot;What methodology did they use?&quot;</p>
                       </>
                     ) : (
                       <>
                         <p>📄 Abstract only - download for full analysis</p>
-                        <p>Try: "What problem does this solve?"</p>
+                        <p>Try: &quot;What problem does this solve?&quot;</p>
                       </>
                     )}
                   </div>
                 </div>
               )}
 
-              {chatMessages.map((message: { id: Key | null | undefined; isUser: any; text: string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<any> | null | undefined; timestamp: { toLocaleTimeString: () => string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<any> | null | undefined; }; }) => (
+              {chatMessages.map((message) => (
                 <div key={message.id} className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[80%] p-3 rounded-lg ${message.isUser
                       ? 'bg-blue-600 text-white'
                       : 'bg-white border border-gray-200 text-gray-800'
                     }`}>
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text as ReactNode}</p>
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
                     <p className={`text-xs mt-1 ${message.isUser ? 'text-blue-100' : 'text-gray-500'}`}>
                       {message.timestamp.toLocaleTimeString()}
                     </p>
@@ -551,62 +551,85 @@ export default function ResearchDashboard() {
   }
 
   const downloadPaper = async (paper: Paper) => {
-    if (downloadStatus[paper.id]?.isDownloading) return
+    if (downloadStatus[paper.id]?.isDownloading) return;
 
     setDownloadStatus(prev => ({
-      ...prev,
-      [paper.id]: {
-        isDownloading: true,
-        hasFullText: false
-      }
-    }))
-
-    try {
-      console.log(`Downloading paper: ${paper.title}`)
-      const response = await fetch(`http://127.0.0.1:8000/download-paper/${paper.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          link: paper.link
-        })
-      })
-
-      const result = await response.json()
-
-      if (result.success) {
-        setDownloadStatus(prev => ({
-          ...prev,
-          [paper.id]: {
-            isDownloading: false,
-            hasFullText: true,
-            textLength: result.text_length
-          }
-        }))
-
-        setPapers(prev => prev.map(p =>
-          p.id === paper.id ? { ...p, has_full_text: true } : p
-        ))
-
-        console.log(`Successfully downloaded paper: ${paper.title}`)
-      } else {
-        throw new Error(result.error || 'Download failed')
-      }
-    } catch (error) {
-      console.error('Download error:', error)
-      setDownloadStatus(prev => ({
         ...prev,
         [paper.id]: {
-          isDownloading: false,
-          hasFullText: false,
-          error: error instanceof Error ? error.message : 'Download failed'
+            isDownloading: true,
+            hasFullText: false,
         }
-      }))
-    }
-  }
+    }));
 
-  const downloadAllPapers = async () => {
+    try {
+        console.log(`Downloading paper: ${paper.title}`);
+        const response = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/download-paper/${paper.id}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                link: paper.link
+            })
+        });
+
+        // Check if the response is a file download
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/pdf')) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${paper.title}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+
+            setDownloadStatus(prev => ({
+                ...prev,
+                [paper.id]: {
+                    isDownloading: false,
+                    hasFullText: false, // It is a download, not a full text for analysis
+                }
+            }));
+            console.log(`Successfully downloaded PDF: ${paper.title}`);
+            return; // Exit the function to prevent further processing
+        }
+        
+        // If not a PDF, continue to handle as JSON response from the API
+        const result = await response.json();
+
+        if (result.success) {
+            setDownloadStatus(prev => ({
+                ...prev,
+                [paper.id]: {
+                    isDownloading: false,
+                    hasFullText: true,
+                    textLength: result.text_length,
+                }
+            }));
+            setPapers(prev => prev.map(p =>
+                p.id === paper.id ? { ...p, has_full_text: true } : p
+            ));
+            console.log(`Successfully extracted and cached text: ${paper.title}`);
+        } else {
+            throw new Error(result.error || 'Download failed');
+        }
+    } catch (error) {
+        console.error('Download error:', error);
+        setDownloadStatus(prev => ({
+            ...prev,
+            [paper.id]: {
+                isDownloading: false,
+                hasFullText: false,
+                error: error instanceof Error ? error.message : 'Download failed',
+            }
+        }));
+    }
+};
+
+  const downloadAllPapers = useCallback(async () => {
     console.log("Starting batch download of all papers...")
     const papersToDownload = papers.filter(p =>
       !downloadStatus[p.id]?.hasFullText &&
@@ -627,12 +650,12 @@ export default function ResearchDashboard() {
     }
 
     console.log("Batch download completed")
-  }
+  }, [papers, downloadStatus])
 
-  const fetchPapersForQuery = async (query: string) => {
+  const fetchPapersForQuery = useCallback(async (query: string) => {
     try {
       console.log(`Fetching papers for: ${query}`)
-      const res = await fetch(`http://127.0.0.1:8000/search?query=${encodeURIComponent(query)}&max_results=6`)
+      const res = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/search?query=${encodeURIComponent(query)}&max_results=6`)
       if (!res.ok) {
         console.error(`HTTP error for ${query}: ${res.status}`)
         return []
@@ -656,7 +679,7 @@ export default function ResearchDashboard() {
       console.error(`Error fetching papers for ${query}:`, error)
       return []
     }
-  }
+  }, [])
 
   const loadAllPapers = useCallback(async () => {
     setLoading(true)
@@ -671,7 +694,7 @@ export default function ResearchDashboard() {
     const shuffled = uniquePapers.sort(() => Math.random() - 0.5)
     setPapers(shuffled)
     setLoading(false)
-  }, [])
+  }, [fetchPapersForQuery])
 
   useEffect(() => {
     if (papers.length > 0 && autoDownloadEnabled) {
@@ -680,7 +703,7 @@ export default function ResearchDashboard() {
       }, 2000)
       return () => clearTimeout(timer)
     }
-  }, [papers, autoDownloadEnabled])
+  }, [papers, autoDownloadEnabled, downloadAllPapers])
 
   useEffect(() => {
     const handleEscapeKey = (event: KeyboardEvent) => {
@@ -709,7 +732,7 @@ export default function ResearchDashboard() {
 
   const askGeminiWithFullText = async (question: string, paper: Paper) => {
     try {
-      const backendResponse = await fetch(`http://127.0.0.1:8000/ask-paper/${paper.id}`, {
+      const backendResponse = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/ask-paper/${paper.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, paper_info: { title: paper.title, authors: paper.authors, institution: paper.institution } })
@@ -722,7 +745,7 @@ export default function ResearchDashboard() {
       const backendData = await backendResponse.json()
       if (!backendData.success) throw new Error(backendData.error || 'Failed to get paper content')
       
-      const apiKey = 'AIzaSyBjZ0VU7fTuxgR6so2hSeKVhK6dVDznZJ4'
+      const apiKey = process.env.SERVER_SIDE_API_KEY;
       const prompt = `You are a helpful research assistant with access to the FULL TEXT of a research paper. Please answer the user's question based on the complete paper content, not just the abstract. Paper Title: "${paper.title}". Authors: ${paper.authors.join(", ")}. Institution: ${paper.institution}. FULL PAPER CONTENT: ${backendData.paper_content}. User Question: ${question}. Please provide a detailed, accurate, and breifbrew install cloudflared answer based on the full paper content. You have access to all sections including methodology, results, experiments, and conclusions. If the question asks for specific details, quotes, or technical information, please reference the relevant parts of the paper.`
       
       const modelNames = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
