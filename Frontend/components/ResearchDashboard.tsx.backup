@@ -473,13 +473,10 @@ export default function ResearchDashboard() {
   const [showChat, setShowChat] = useState(false)
   const [showPdfViewer, setShowPdfViewer] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState<PaperDownloadStatus>({})
+  const [autoDownloadEnabled, setAutoDownloadEnabled] = useState(false)
   const [researchQueries, setResearchQueries] = useState<string[]>(initialResearchQueries)
   const [newQuery, setNewQuery] = useState("")
-  
-  // --- NEW STATE FOR INFINITE SCROLL ---
   const [isLoadingMore, setIsLoadingMore] = useState(false)
-  const [page, setPage] = useState(1)
-  const [hasMore, setHasMore] = useState(true)
 
   const formatDate = (dateString: string) => {
     try {
@@ -567,7 +564,7 @@ export default function ResearchDashboard() {
 
     try {
         console.log(`Downloading paper: ${paper.title}`);
-        const response = await fetch(`http://127.0.0.1:8000/download-paper/${paper.id}`, {
+        const response = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/download-paper/${paper.id}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -576,6 +573,29 @@ export default function ResearchDashboard() {
                 link: paper.link
             })
         });
+
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/pdf')) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${paper.title}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+
+            setDownloadStatus(prev => ({
+                ...prev,
+                [paper.id]: {
+                    isDownloading: false,
+                    hasFullText: false,
+                }
+            }));
+            console.log(`Successfully downloaded PDF: ${paper.title}`);
+            return;
+        }
         
         const result = await response.json();
 
@@ -593,7 +613,7 @@ export default function ResearchDashboard() {
             ));
             console.log(`Successfully extracted and cached text: ${paper.title}`);
         } else {
-            throw new Error(result.message || 'Download failed');
+            throw new Error(result.error || 'Download failed');
         }
     } catch (error) {
         console.error('Download error:', error);
@@ -608,10 +628,33 @@ export default function ResearchDashboard() {
     }
 };
 
-  const fetchPapersForQuery = useCallback(async (query: string, pageNum: number) => {
+  const downloadAllPapers = useCallback(async () => {
+    console.log("Starting batch download of all papers...")
+    const papersToDownload = papers.filter(p =>
+      !downloadStatus[p.id]?.hasFullText &&
+      !downloadStatus[p.id]?.isDownloading &&
+      !downloadStatus[p.id]?.error
+    )
+
+    console.log(`Found ${papersToDownload.length} papers to download`)
+
+    const batchSize = 3
+    for (let i = 0; i < papersToDownload.length; i += batchSize) {
+      const batch = papersToDownload.slice(i, i + batchSize)
+      console.log(`Downloading batch ${Math.floor(i / batchSize) + 1}: ${batch.length} papers`)
+      await Promise.all(batch.map(paper => downloadPaper(paper)))
+      if (i + batchSize < papersToDownload.length) {
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+    }
+
+    console.log("Batch download completed")
+  }, [papers, downloadStatus])
+
+  const fetchPapersForQuery = useCallback(async (query: string) => {
     try {
-      console.log(`Fetching papers for: ${query}, page: ${pageNum}`)
-      const res = await fetch(`http://127.0.0.1:8000/search?query=${encodeURIComponent(query)}&max_results=10&page=${pageNum}`)
+      console.log(`Fetching papers for: ${query}`)
+      const res = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/search?query=${encodeURIComponent(query)}&max_results=10`)
       if (!res.ok) {
         console.error(`HTTP error for ${query}: ${res.status}`)
         return []
@@ -622,7 +665,7 @@ export default function ResearchDashboard() {
         return []
       }
       if (!data.papers || data.papers.length === 0) {
-        console.log(`No more papers found for ${query} on page ${pageNum}`)
+        console.log(`No papers found for ${query}`)
         return []
       }
       return data.papers.map((paper: Paper) => ({
@@ -637,54 +680,48 @@ export default function ResearchDashboard() {
     }
   }, [])
   
-  const loadAllPapers = useCallback(async (isRefresh = false) => {
-    setLoading(true);
-    setPage(1); // Reset page count
-    setHasMore(true); // Reset hasMore flag
-
-    const allPapers: Paper[] = [];
-    // Use Promise.all for concurrent fetching
-    const promises = researchQueries.map(query => fetchPapersForQuery(query, 1));
-    const results = await Promise.all(promises);
-    
-    results.forEach(papers => allPapers.push(...papers));
-
-    const uniquePapers = allPapers.filter((paper, index, self) =>
-      index === self.findIndex(p => p.link === paper.link)
-    );
-    const shuffled = uniquePapers.sort(() => Math.random() - 0.5);
-    setPapers(shuffled);
-    setLoading(false);
-  }, [fetchPapersForQuery, researchQueries]);
-
-  // --- NEW FUNCTION TO LOAD MORE PAPERS ---
-  const handleLoadMore = useCallback(async () => {
-    if (isLoadingMore || !hasMore) return;
-
-    setIsLoadingMore(true);
-    const nextPage = page + 1;
-
-    console.log(`Attempting to load more papers for page ${nextPage}...`);
-
-    const promises = researchQueries.map(query => fetchPapersForQuery(query, nextPage));
-    const results = await Promise.all(promises);
-    const allNewPapers = results.flat();
-    
-    if (allNewPapers.length > 0) {
-        setPapers(prevPapers => {
-            const combined = [...prevPapers, ...allNewPapers];
-            return combined.filter((paper, index, self) =>
-                index === self.findIndex(p => p.link === paper.link)
-            );
-        });
-        setPage(nextPage);
-    } else {
-        console.log("No more papers to load.");
-        setHasMore(false);
+  const fetchAndAppendPapers = useCallback(async (queriesToFetch: string[]) => {
+    const allNewPapers: Paper[] = []
+    for (const query of queriesToFetch) {
+      const fetchedPapers = await fetchPapersForQuery(query)
+      allNewPapers.push(...fetchedPapers)
     }
 
-    setIsLoadingMore(false);
-  }, [isLoadingMore, hasMore, page, researchQueries, fetchPapersForQuery]);
+    setPapers(prevPapers => {
+      const combined = [...prevPapers, ...allNewPapers]
+      const uniquePapers = combined.filter((paper, index, self) =>
+        index === self.findIndex(p => p.link === paper.link)
+      )
+      return uniquePapers
+    })
+  }, [fetchPapersForQuery])
+
+  const loadAllPapers = useCallback(async (isRefresh = false) => {
+    setLoading(true)
+    if (isRefresh) {
+      setPapers([])
+    }
+    const allPapers: Paper[] = []
+    for (const query of researchQueries) {
+      const papers = await fetchPapersForQuery(query)
+      allPapers.push(...papers)
+    }
+    const uniquePapers = allPapers.filter((paper, index, self) =>
+      index === self.findIndex(p => p.link === paper.link)
+    )
+    const shuffled = uniquePapers.sort(() => Math.random() - 0.5)
+    setPapers(shuffled)
+    setLoading(false)
+  }, [fetchPapersForQuery, researchQueries])
+
+  useEffect(() => {
+    if (papers.length > 0 && autoDownloadEnabled) {
+      const timer = setTimeout(() => {
+        downloadAllPapers()
+      }, 2000)
+      return () => clearTimeout(timer)
+    }
+  }, [papers, autoDownloadEnabled, downloadAllPapers])
 
   useEffect(() => {
     const handleEscapeKey = (event: KeyboardEvent) => {
@@ -709,20 +746,128 @@ export default function ResearchDashboard() {
 
   useEffect(() => {
     loadAllPapers(false)
-  }, [loadAllPapers]) // Depend on loadAllPapers which depends on queries
+  }, [])
 
   const askGeminiWithFullText = async (question: string, paper: Paper) => {
-    // This function remains unchanged
-    return "Full text analysis is working.";
+    try {
+      const backendResponse = await fetch(`http://paper-dashboard.us-east-2.elasticbeanstalk.com/ask-paper/${paper.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, paper_info: { title: paper.title, authors: paper.authors, institution: paper.institution } })
+      })
+      if (!backendResponse.ok) {
+        const errorData = await backendResponse.json()
+        if (errorData.needs_download) return "📄 This paper hasn't been downloaded yet. Please click the 'Download PDF' button first to access the full text."
+        throw new Error(errorData.error || 'Failed to get paper content')
+      }
+      const backendData = await backendResponse.json()
+      if (!backendData.success) throw new Error(backendData.error || 'Failed to get paper content')
+      
+      const apiKey = process.env.SERVER_SIDE_API_KEY;
+      const prompt = `You are a helpful research assistant with access to the FULL TEXT of a research paper. Please answer the user's question based on the complete paper content, not just the abstract. Paper Title: "${paper.title}". Authors: ${paper.authors.join(", ")}. Institution: ${paper.institution}. FULL PAPER CONTENT: ${backendData.paper_content}. User Question: ${question}. Please provide a detailed, accurate, and breifbrew install cloudflared answer based on the full paper content. You have access to all sections including methodology, results, experiments, and conclusions. If the question asks for specific details, quotes, or technical information, please reference the relevant parts of the paper.`
+      
+      const modelNames = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
+      let response;
+      let lastError;
+      for (const modelName of modelNames) {
+        try {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          if (response.ok) break;
+          lastError = await response.text();
+        } catch (err) { lastError = err; }
+      }
+      if (!response || !response.ok) throw new Error(`All models failed. Last error: ${lastError}`);
+
+      const data = await response.json()
+      if (data.candidates?.[0]?.content?.parts) {
+        const responseText = data.candidates[0].content.parts[0].text
+        const fullTextIndicator = `\n\n📄 *Note: Response based on ${backendData.is_truncated ? `${Math.round(backendData.content_length / 1000)}k characters of paper content (truncated)` : `complete paper content (${Math.round(backendData.content_length / 1000)}k characters)`}*`
+        return responseText + fullTextIndicator
+      } else {
+        console.error('Unexpected response structure:', data)
+        return "I received an unexpected response format. Please try again."
+      }
+    } catch (error) {
+      console.error('Error calling Gemini API with full text:', error)
+      return `Error: ${error instanceof Error ? error.message : 'Unknown error'}. Please check the browser console for more details.`
+    }
   }
 
   const askGeminiWithAbstract = async (question: string, paper: Paper) => {
-    // This function remains unchanged
-    return "Abstract analysis is working.";
+    try {
+      const apiKey = 'AIzaSyBjZ0VU7fTuxgR6so2hSeKVhK6dVDznZJ4'
+      const prompt = `You are a helpful research assistant. Based on the following research paper abstract, please answer the user's question in a clear and informative way. Paper Title: "${paper.title}". Authors: ${paper.authors.join(", ")}. Institution: ${paper.institution}. Abstract: "${paper.summary}". User Question: ${question}. Please provide a helpful explanation based on the abstract content. If the question cannot be answered from the abstract alone, mention that the full paper would be needed for a complete answer.`
+      
+      const modelNames = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
+      let response;
+      let lastError;
+      for (const modelName of modelNames) {
+        try {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+          });
+          if (response.ok) break;
+          lastError = await response.text();
+        } catch (err) { lastError = err; }
+      }
+      if (!response || !response.ok) throw new Error(`All models failed. Last error: ${lastError}`);
+      
+      const data = await response.json()
+      if (data.candidates?.[0]?.content?.parts) {
+        return data.candidates[0].content.parts[0].text + "\n\n📄 *Note: Response based on abstract only. Download the full paper for more detailed analysis.*"
+      } else {
+        console.error('Unexpected response structure:', data)
+        return "I received an unexpected response format. Please try again."
+      }
+    } catch (error) {
+      console.error('Error calling Gemini API:', error)
+      return `Error: ${error instanceof Error ? error.message : 'Unknown error'}. Please check the browser console for more details.`
+    }
   }
 
   const handleSendMessage = async () => {
-    // This function remains unchanged
+    if (!currentMessage.trim() || !selectedPaper || isLoadingResponse) return
+
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      text: currentMessage,
+      isUser: true,
+      timestamp: new Date()
+    }
+
+    setChatMessages(prev => [...prev, userMessage])
+    const messageToSend = currentMessage;
+    setCurrentMessage("")
+    setIsLoadingResponse(true)
+
+    try {
+      const hasFullText = downloadStatus[selectedPaper.id]?.hasFullText || selectedPaper.has_full_text
+      const response = hasFullText ? await askGeminiWithFullText(messageToSend, selectedPaper) : await askGeminiWithAbstract(messageToSend, selectedPaper)
+
+      const aiMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        text: response,
+        isUser: false,
+        timestamp: new Date()
+      }
+      setChatMessages(prev => [...prev, aiMessage])
+    } catch (error) {
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        text: "I'm sorry, there was an error processing your question. Please try again.",
+        isUser: false,
+        timestamp: new Date()
+      }
+      setChatMessages(prev => [...prev, errorMessage])
+    } finally {
+      setIsLoadingResponse(false)
+    }
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -747,11 +892,11 @@ export default function ResearchDashboard() {
   }, [])
   
   const handleAddQuery = async () => {
-    const trimmedQuery = newQuery.trim().toLowerCase();
+    const trimmedQuery = newQuery.trim().toLowerCase()
     if (trimmedQuery && !researchQueries.includes(trimmedQuery)) {
-        setResearchQueries(prev => [...prev, trimmedQuery]);
-        // The loadAllPapers will be re-run by its own useEffect due to query changes
-        setNewQuery("");
+      setResearchQueries(prev => [...prev, trimmedQuery])
+      await fetchAndAppendPapers([trimmedQuery])
+      setNewQuery("")
     }
   }
 
@@ -760,13 +905,33 @@ export default function ResearchDashboard() {
     setPapers(prev => prev.filter(p => p.category !== queryToRemove))
   }
 
-  // --- NEW EFFECT FOR SCROLL LISTENING ---
+  const handleLoadMore = useCallback(async () => {
+    // Prevent multiple simultaneous fetches
+    if (isLoadingMore) return;
+
+    setIsLoadingMore(true);
+    console.log("Attempting to load more papers...");
+
+    try {
+      // This is the core logic to fetch papers
+      await fetchAndAppendPapers(researchQueries);
+      console.log("Successfully loaded more papers.");
+    } catch (error) {
+      // Log any errors that occur during the fetch
+      console.error("Failed to load more papers:", error);
+    } finally {
+      // This block is crucial: it ALWAYS runs, whether the fetch succeeded or failed.
+      // This ensures the loading state is never stuck on true.
+      setIsLoadingMore(false);
+      console.log("Load attempt finished, resetting loading state.");
+    }
+  }, [isLoadingMore, researchQueries, fetchAndAppendPapers]);
+  
   useEffect(() => {
     const handleScroll = () => {
-      // Check if user is near the bottom of the page
       const isAtBottom = window.innerHeight + window.scrollY >= document.documentElement.offsetHeight - 500;
       
-      if (isAtBottom && !loading && !isLoadingMore && hasMore) {
+      if (isAtBottom && !loading && !isLoadingMore) {
         handleLoadMore();
       }
     };
@@ -774,7 +939,7 @@ export default function ResearchDashboard() {
     window.addEventListener('scroll', handleScroll);
     
     return () => window.removeEventListener('scroll', handleScroll);
-  }, [loading, isLoadingMore, hasMore, handleLoadMore]); // Dependencies
+  }, [loading, isLoadingMore, handleLoadMore]);
 
   if (loading) {
     return (
@@ -843,7 +1008,6 @@ export default function ResearchDashboard() {
           ))}
         </div>
         
-        {/* --- NEW LOADING INDICATOR FOR SCROLLING --- */}
         {isLoadingMore && (
           <div className="text-center mt-12">
             <div className="inline-flex items-center">

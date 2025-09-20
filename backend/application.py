@@ -13,7 +13,7 @@ import fitz  # PyMuPDF - alternative PDF parser
 application = Flask(__name__)
 
 # Enable CORS for all routes and origins
-CORS(application, origins=["*"]) 
+CORS(application, origins=["*"])
 
 # Store downloaded paper content in memory (in production, use a database)
 paper_content_cache = {}
@@ -98,16 +98,18 @@ def download_paper_pdf(paper_link, paper_id):
         print(f"❌ Error downloading paper PDF: {e}")
         return None
 
-def fetch_arxiv_papers_simple(query="Computer Architecture", max_results=6):
-    """Simple arXiv fetch with immediate fallback to mock data"""
-    print(f"🔍 Searching for: {query}")
-    
+# MODIFIED FUNCTION TO SUPPORT PAGINATION
+def fetch_arxiv_papers_simple(query="Computer Architecture", max_results=6, page=1):
+    """Simple arXiv fetch with pagination support"""
+    print(f"🔍 Searching for: '{query}', Page: {page}")
+    start_index = (page - 1) * max_results
+
     try:
         # Simple arXiv API call
         base_url = "http://export.arxiv.org/api/query"
         params = {
             'search_query': f'all:{query}',
-            'start': 0,
+            'start': start_index,
             'max_results': max_results,
             'sortBy': 'submittedDate',
             'sortOrder': 'descending'
@@ -126,12 +128,12 @@ def fetch_arxiv_papers_simple(query="Computer Architecture", max_results=6):
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
         
         entries = root.findall('atom:entry', ns)
-        print(f"📄 Found {len(entries)} entries from arXiv")
+        print(f"📄 Found {len(entries)} entries from arXiv for page {page}")
         
         if len(entries) == 0:
-            print("⚠️  No entries found, using mock data")
-            return get_mock_papers_for_query(query, max_results)
-        
+            # Return empty list for subsequent pages, mock data only for page 1
+            return [] if page > 1 else get_mock_papers_for_query(query, max_results)
+
         papers = []
         for entry in entries:
             try:
@@ -168,8 +170,8 @@ def fetch_arxiv_papers_simple(query="Computer Architecture", max_results=6):
         
     except Exception as e:
         print(f"❌ arXiv API error: {e}")
-        print("🎭 Falling back to mock data")
-        return get_mock_papers_for_query(query, max_results)
+        print("🎭 Falling back to mock data if page 1")
+        return get_mock_papers_for_query(query, max_results) if page == 1 else []
 
 def get_mock_papers_for_query(query, max_results):
     """Get mock papers relevant to query"""
@@ -201,6 +203,7 @@ def get_mock_papers_for_query(query, max_results):
     
     return relevant_papers[:max_results]
 
+# MODIFIED ROUTE TO SUPPORT PAGINATION
 @application.route('/search', methods=['GET', 'POST'])
 def search():
     """Main search endpoint"""
@@ -209,23 +212,26 @@ def search():
             data = request.get_json()
             query = data.get('query', 'machine learning')
             max_results = data.get('max_results', 6)
+            page = data.get('page', 1)
         else:
             query = request.args.get('query', 'machine learning')
             max_results = int(request.args.get('max_results', 6))
+            page = int(request.args.get('page', 1))
         
-        print(f"\n🚀 New search request: '{query}' (max: {max_results})")
+        print(f"\n🚀 New search request: '{query}' (max: {max_results}, page: {page})")
         
-        papers = fetch_arxiv_papers_simple(query, max_results)
+        papers = fetch_arxiv_papers_simple(query, max_results, page=page)
         
         response = {
             'success': True,
             'query': query,
+            'page': page,
             'count': len(papers),
             'papers': papers,
             'timestamp': datetime.now().isoformat()
         }
         
-        print(f"📤 Returning {len(papers)} papers")
+        print(f"📤 Returning {len(papers)} papers for page {page}")
         return jsonify(response)
         
     except Exception as e:
@@ -416,7 +422,7 @@ if __name__ == '__main__':
     print("📚 Will try arXiv API first, fallback to mock data if needed")
     print("📄 PDF processing enabled with PyMuPDF and PyPDF2 fallback")
     print("🌐 CORS enabled for localhost:3000")
-    print("💡 Test endpoint: http://127.0.0.1:8000/search?query=machine+learning")
+    print("💡 Test endpoint: http://127.0.0.1:8000/search?query=machine+learning&page=1")
     print("-" * 50)
     
     # Install required packages reminder
