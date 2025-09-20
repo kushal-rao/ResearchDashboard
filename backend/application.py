@@ -98,7 +98,6 @@ def download_paper_pdf(paper_link, paper_id):
         print(f"❌ Error downloading paper PDF: {e}")
         return None
 
-# MODIFIED FUNCTION TO SUPPORT PAGINATION
 def fetch_arxiv_papers_simple(query="Computer Architecture", max_results=6, page=1):
     """Simple arXiv fetch with pagination support"""
     print(f"🔍 Searching for: '{query}', Page: {page}")
@@ -177,7 +176,6 @@ def get_mock_papers_for_query(query, max_results):
     """Get mock papers relevant to query"""
     print(f"🎭 Using mock data for query: {query}")
     
-    # Filter mock papers based on query keywords
     query_words = query.lower().split()
     relevant_papers = []
     
@@ -189,7 +187,6 @@ def get_mock_papers_for_query(query, max_results):
             paper_copy['has_full_text'] = False
             relevant_papers.append(paper_copy)
     
-    # If no relevant papers found, return some random papers
     if not relevant_papers:
         for i, paper in enumerate(MOCK_PAPERS[:max_results]):
             paper_copy = paper.copy()
@@ -197,26 +194,52 @@ def get_mock_papers_for_query(query, max_results):
             paper_copy['has_full_text'] = False
             relevant_papers.append(paper_copy)
     
-    # Add query-specific category
     for paper in relevant_papers:
         paper['category'] = query
     
     return relevant_papers[:max_results]
 
-# MODIFIED ROUTE TO SUPPORT PAGINATION
+# --- NEW HELPER FUNCTION TO FIND A SINGLE PAPER ---
+def find_paper_on_arxiv(title):
+    try:
+        base_url = "http://export.arxiv.org/api/query"
+        # Use ti: for title search and quotes for a more exact match
+        params = {'search_query': f'ti:"{title}"', 'max_results': 1}
+        response = requests.get(base_url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        root = ET.fromstring(response.content)
+        ns = {'atom': 'http://www.w3.org/2005/Atom'}
+        entry = root.find('atom:entry', ns)
+
+        if entry is None:
+            return None
+
+        link = entry.find('atom:id', ns).text.strip()
+        paper_details = {
+            'id': f"{hash(link)}_found",
+            'title': entry.find('atom:title', ns).text.strip(),
+            'authors': [author.find('atom:name', ns).text.strip() for author in entry.findall('atom:author', ns)] or ['Unknown Author'],
+            'summary': re.sub(r'\s+', ' ', entry.find('atom:summary', ns).text.strip()),
+            'link': link,
+            'published': entry.find('atom:published', ns).text.strip(),
+            'has_full_text': False,
+            'category': 'Found by Title'
+        }
+        return paper_details
+    except Exception as e:
+        print(f"❌ Error finding paper on arXiv: {e}")
+        return None
+
 @application.route('/search', methods=['GET', 'POST'])
 def search():
     """Main search endpoint"""
     try:
         if request.method == 'POST':
             data = request.get_json()
-            query = data.get('query', 'machine learning')
-            max_results = data.get('max_results', 6)
-            page = data.get('page', 1)
+            query, max_results, page = data.get('query', 'ml'), data.get('max_results', 6), data.get('page', 1)
         else:
-            query = request.args.get('query', 'machine learning')
-            max_results = int(request.args.get('max_results', 6))
-            page = int(request.args.get('page', 1))
+            query, max_results, page = request.args.get('query', 'ml'), int(request.args.get('max_results', 6)), int(request.args.get('page', 1))
         
         print(f"\n🚀 New search request: '{query}' (max: {max_results}, page: {page})")
         
@@ -236,11 +259,23 @@ def search():
         
     except Exception as e:
         print(f"❌ Search endpoint error: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }), 500
+        return jsonify({ 'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat() }), 500
+
+# --- NEW ENDPOINT TO FIND A SINGLE PAPER ---
+@application.route('/find-paper', methods=['POST'])
+def find_paper():
+    data = request.get_json()
+    title = data.get('title')
+    if not title:
+        return jsonify({'success': False, 'error': 'Title is required'}), 400
+
+    print(f"🔎 Finding paper by title: '{title}'")
+    paper = find_paper_on_arxiv(title)
+
+    if paper:
+        return jsonify({'success': True, 'paper': paper})
+    else:
+        return jsonify({'success': False, 'error': f'Paper with title "{title}" not found on arXiv.'}), 404
 
 @application.route('/download-paper/<paper_id>', methods=['POST'])
 def download_paper(paper_id):
@@ -250,80 +285,43 @@ def download_paper(paper_id):
         paper_link = data.get('link')
         
         if not paper_link:
-            return jsonify({
-                'success': False,
-                'error': 'Paper link is required'
-            }), 400
+            return jsonify({ 'success': False, 'error': 'Paper link is required' }), 400
         
         print(f"📥 Download request for paper {paper_id}: {paper_link}")
         
-        # Check if already cached
         if paper_id in paper_content_cache:
             print(f"📚 Paper {paper_id} already cached")
-            return jsonify({
-                'success': True,
-                'message': 'Paper already downloaded',
-                'has_full_text': True,
-                'text_length': len(paper_content_cache[paper_id])
-            })
+            return jsonify({ 'success': True, 'message': 'Paper already downloaded', 'has_full_text': True, 'text_length': len(paper_content_cache[paper_id]) })
         
-        # Download and extract text
         full_text = download_paper_pdf(paper_link, paper_id)
         
         if full_text is None:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to download or extract text from PDF',
-                'message': 'The paper might be a scanned document, behind a paywall, or in an unsupported format.'
-            }), 400
+            return jsonify({ 'success': False, 'error': 'Failed to download or extract text from PDF', 'message': 'The paper might be a scanned document, behind a paywall, or in an unsupported format.' }), 400
         
-        # Cache the content
         paper_content_cache[paper_id] = full_text
         
         print(f"✅ Successfully cached paper {paper_id}")
-        return jsonify({
-            'success': True,
-            'message': 'Paper downloaded and processed successfully',
-            'has_full_text': True,
-            'text_length': len(full_text)
-        })
+        return jsonify({ 'success': True, 'message': 'Paper downloaded and processed successfully', 'has_full_text': True, 'text_length': len(full_text) })
         
     except Exception as e:
         print(f"❌ Download error: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({ 'success': False, 'error': str(e) }), 500
 
 @application.route('/paper-content/<paper_id>', methods=['GET'])
 def get_paper_content(paper_id):
     """Get cached paper content for AI questioning"""
     try:
         if paper_id not in paper_content_cache:
-            return jsonify({
-                'success': False,
-                'error': 'Paper not found in cache. Please download it first.'
-            }), 404
+            return jsonify({ 'success': False, 'error': 'Paper not found in cache. Please download it first.' }), 404
         
         content = paper_content_cache[paper_id]
-        
-        # Return truncated content for preview (full content will be used by AI)
         preview = content[:1000] + "..." if len(content) > 1000 else content
         
-        return jsonify({
-            'success': True,
-            'has_content': True,
-            'preview': preview,
-            'full_length': len(content),
-            'message': f'Full text available ({len(content)} characters)'
-        })
+        return jsonify({ 'success': True, 'has_content': True, 'preview': preview, 'full_length': len(content), 'message': f'Full text available ({len(content)} characters)' })
         
     except Exception as e:
         print(f"❌ Content retrieval error: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({ 'success': False, 'error': str(e) }), 500
 
 @application.route('/ask-paper/<paper_id>', methods=['POST'])
 def ask_paper_question(paper_id):
@@ -331,54 +329,36 @@ def ask_paper_question(paper_id):
     try:
         data = request.get_json()
         question = data.get('question', '')
-        paper_info = data.get('paper_info', {})
         
         if not question:
-            return jsonify({
-                'success': False,
-                'error': 'Question is required'
-            }), 400
+            return jsonify({ 'success': False, 'error': 'Question is required' }), 400
         
         if paper_id not in paper_content_cache:
-            return jsonify({
-                'success': False,
-                'error': 'Paper content not available. Please download the paper first.',
-                'needs_download': True
-            }), 404
+            return jsonify({ 'success': False, 'error': 'Paper content not available. Please download the paper first.', 'needs_download': True }), 404
         
-        # Get the full paper content
         full_content = paper_content_cache[paper_id]
         
-        # Truncate content if too long (most LLMs have token limits)
-        max_content_length = 15000  # Adjust based on your LLM's context window
+        max_content_length = 15000
         if len(full_content) > max_content_length:
-            # Try to keep the beginning and end, which often contain important info
             truncated_content = full_content[:max_content_length//2] + "\n\n[... content truncated ...]\n\n" + full_content[-max_content_length//2:]
         else:
             truncated_content = full_content
         
         return jsonify({
-            'success': True,
-            'paper_content': truncated_content,
-            'content_length': len(full_content),
-            'is_truncated': len(full_content) > max_content_length,
-            'paper_info': paper_info,
+            'success': True, 'paper_content': truncated_content, 'content_length': len(full_content),
+            'is_truncated': len(full_content) > max_content_length, 'paper_info': data.get('paper_info', {}),
             'question': question
         })
         
     except Exception as e:
         print(f"❌ Question processing error: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({ 'success': False, 'error': str(e) }), 500
 
 @application.route('/papers', methods=['GET'])
 def get_papers():
     """Legacy papers endpoint"""
     query = request.args.get('query', 'computer science')
     max_results = int(request.args.get('max_results', 6))
-    
     papers = fetch_arxiv_papers_simple(query, max_results)
     return jsonify(papers)
 
@@ -387,15 +367,9 @@ def cache_status():
     """Get information about cached papers"""
     cache_info = {}
     for paper_id, content in paper_content_cache.items():
-        cache_info[paper_id] = {
-            'length': len(content),
-            'preview': content[:200] + "..." if len(content) > 200 else content
-        }
+        cache_info[paper_id] = { 'length': len(content), 'preview': content[:200] + "..." }
     
-    return jsonify({
-        'cached_papers': len(paper_content_cache),
-        'papers': cache_info
-    })
+    return jsonify({ 'cached_papers': len(paper_content_cache), 'papers': cache_info })
 
 @application.route('/', methods=['GET'])
 def health_check():
@@ -403,11 +377,12 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'message': 'arXiv Research Dashboard API with PDF Processing',
-        'version': '4.0',
+        'version': '4.1', # Incremented version
         'port': 8000,
         'cached_papers': len(paper_content_cache),
         'endpoints': {
-            '/search': 'GET/POST - Search papers',
+            '/search': 'GET/POST - Search papers by topic (paginated)',
+            '/find-paper': 'POST - Find a specific paper by title',
             '/download-paper/<id>': 'POST - Download paper PDF',
             '/paper-content/<id>': 'GET - Get cached paper content',
             '/ask-paper/<id>': 'POST - Ask questions with full paper context',
@@ -421,8 +396,7 @@ if __name__ == '__main__':
     print("🚀 Starting Enhanced Research Dashboard API on port 8000...")
     print("📚 Will try arXiv API first, fallback to mock data if needed")
     print("📄 PDF processing enabled with PyMuPDF and PyPDF2 fallback")
-    print("🌐 CORS enabled for localhost:3000")
-    print("💡 Test endpoint: http://127.0.0.1:8000/search?query=machine+learning&page=1")
+    print("💡 New endpoint available: POST /find-paper")
     print("-" * 50)
     
     # Install required packages reminder

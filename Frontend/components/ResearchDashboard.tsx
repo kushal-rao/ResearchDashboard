@@ -1,6 +1,6 @@
 "use client"
-import { useState, useEffect, useCallback, JSXElementConstructor, Key, ReactElement, ReactNode, ReactPortal } from "react"
-import { Calendar, User, Building2, BookOpen, X, ExternalLink, Globe, MessageCircle, Send, Bot, Download, FileText, AlertCircle, CheckCircle, Eye, Zap, Plus, Loader2 } from "lucide-react"
+import { useState, useEffect, useCallback } from "react"
+import { Calendar, User, Building2, BookOpen, X, ExternalLink, Globe, MessageCircle, Send, Bot, Download, FileText, AlertCircle, CheckCircle, Eye, Zap, Plus, Loader2, Settings, Search } from "lucide-react"
 
 type Paper = {
   id: string
@@ -61,13 +61,13 @@ const INSTITUTIONS = [
 // Simple LaTeX renderer for basic expressions
 const renderLatex = (text: string) => {
   return text
-    .replace(/\$\$([^$]+)\$\$/g, '<span class="font-mono bg-gray-100 px-1 rounded">$1</span>') // Display math
-    .replace(/\$([^$]+)\$/g, '<span class="font-mono bg-gray-100 px-1 rounded">$1</span>')   // Inline math
-    .replace(/\\textbf\{([^}]+)\}/g, '<strong>$1</strong>') // Bold
-    .replace(/\\textit\{([^}]+)\}/g, '<em>$1</em>')       // Italic
-    .replace(/\\emph\{([^}]+)\}/g, '<em>$1</em>')         // Emphasis
-    .replace(/\\cite\{([^}]+)\}/g, '[$1]')               // Citations
-    .replace(/\\ref\{([^}]+)\}/g, '($1)')                 // References
+    .replace(/\$\$([^$]+)\$\$/g, '<span class="font-mono bg-gray-100 px-1 rounded">$1</span>')
+    .replace(/\$([^$]+)\$/g, '<span class="font-mono bg-gray-100 px-1 rounded">$1</span>')
+    .replace(/\\textbf\{([^}]+)\}/g, '<strong>$1</strong>')
+    .replace(/\\textit\{([^}]+)\}/g, '<em>$1</em>')
+    .replace(/\\emph\{([^}]+)\}/g, '<em>$1</em>')
+    .replace(/\\cite\{([^}]+)\}/g, '[$1]')
+    .replace(/\\ref\{([^}]+)\}/g, '($1)')
 }
 
 // =================================================================================
@@ -325,7 +325,7 @@ const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfV
                 <button
                   onClick={() => {
                     setShowPdfViewer(!showPdfViewer);
-                    if (!showPdfViewer) { // If we are about to show the PDF, also show chat
+                    if (!showPdfViewer) {
                       setShowChat(true);
                     }
                   }}
@@ -412,7 +412,7 @@ const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfV
                 <div key={message.id} className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[80%] p-3 rounded-lg ${message.isUser
                       ? 'bg-blue-600 text-white'
-                      : 'bg-white border border-gray-200 text-gray-800'
+                      : 'bg-white border border-gray-200 text-gray-900' 
                     }`}>
                     <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
                     <p className={`text-xs mt-1 ${message.isUser ? 'text-blue-100' : 'text-gray-500'}`}>
@@ -442,7 +442,7 @@ const PaperModal = ({ paper, onClose, downloadStatus, showPdfViewer, setShowPdfV
                   onChange={(e) => setCurrentMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder={hasFullText ? "Ask detailed questions about this paper..." : "Ask about this paper (abstract only)..."}
-                  className="flex-1 p-3 border border-gray-300 rounded-lg resize-none text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 p-3 border border-gray-300 rounded-lg resize-none text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   rows={2}
                   disabled={isLoadingResponse}
                 />
@@ -476,10 +476,15 @@ export default function ResearchDashboard() {
   const [researchQueries, setResearchQueries] = useState<string[]>(initialResearchQueries)
   const [newQuery, setNewQuery] = useState("")
   
-  // --- NEW STATE FOR INFINITE SCROLL ---
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
+  
+  const [showQueryManager, setShowQueryManager] = useState(false);
+
+  const [titleQuery, setTitleQuery] = useState("");
+  const [isFindingPaper, setIsFindingPaper] = useState(false);
+  const [findPaperError, setFindPaperError] = useState<string | null>(null);
 
   const formatDate = (dateString: string) => {
     try {
@@ -639,15 +644,12 @@ export default function ResearchDashboard() {
   
   const loadAllPapers = useCallback(async (isRefresh = false) => {
     setLoading(true);
-    setPage(1); // Reset page count
-    setHasMore(true); // Reset hasMore flag
+    setPage(1);
+    setHasMore(true);
 
-    const allPapers: Paper[] = [];
-    // Use Promise.all for concurrent fetching
     const promises = researchQueries.map(query => fetchPapersForQuery(query, 1));
     const results = await Promise.all(promises);
-    
-    results.forEach(papers => allPapers.push(...papers));
+    const allPapers = results.flat();
 
     const uniquePapers = allPapers.filter((paper, index, self) =>
       index === self.findIndex(p => p.link === paper.link)
@@ -657,7 +659,6 @@ export default function ResearchDashboard() {
     setLoading(false);
   }, [fetchPapersForQuery, researchQueries]);
 
-  // --- NEW FUNCTION TO LOAD MORE PAPERS ---
   const handleLoadMore = useCallback(async () => {
     if (isLoadingMore || !hasMore) return;
 
@@ -689,68 +690,56 @@ export default function ResearchDashboard() {
   useEffect(() => {
     const handleEscapeKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && selectedPaper) {
-        setSelectedPaper(null)
-        setShowChat(false)
-        setShowPdfViewer(false)
-        setChatMessages([])
+        setSelectedPaper(null);
+        setShowChat(false);
+        setShowPdfViewer(false);
+        setChatMessages([]);
       }
-    }
+    };
 
     if (selectedPaper) {
-      document.addEventListener('keydown', handleEscapeKey)
-      document.body.style.overflow = 'hidden'
+      document.addEventListener('keydown', handleEscapeKey);
+      document.body.style.overflow = 'hidden';
     }
 
     return () => {
-      document.removeEventListener('keydown', handleEscapeKey)
-      document.body.style.overflow = 'unset'
+      document.removeEventListener('keydown', handleEscapeKey);
+      document.body.style.overflow = 'unset';
+    };
+  }, [selectedPaper]);
+  
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowQueryManager(false);
+      }
+    };
+
+    if (showQueryManager) {
+      document.addEventListener('keydown', handleKeyDown);
     }
-  }, [selectedPaper])
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showQueryManager]);
+
 
   useEffect(() => {
     loadAllPapers(false)
-  }, [loadAllPapers]) // Depend on loadAllPapers which depends on queries
+  }, [loadAllPapers])
 
-  const askGeminiWithFullText = async (question: string, paper: Paper) => {
-    // This function remains unchanged
-    return "Full text analysis is working.";
-  }
-
-  const askGeminiWithAbstract = async (question: string, paper: Paper) => {
-    // This function remains unchanged
-    return "Abstract analysis is working.";
-  }
-
-  const handleSendMessage = async () => {
-    // This function remains unchanged
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
-    }
-  }
-
-  const getPdfUrl = (paper: Paper) => {
-    if (paper.link.includes('arxiv.org/abs/')) {
-      return paper.link.replace('/abs/', '/pdf/') + '.pdf'
-    }
-    return paper.link
-  }
-
-  const handleCloseModal = useCallback(() => {
-    setSelectedPaper(null)
-    setShowChat(false)
-    setShowPdfViewer(false)
-    setChatMessages([])
-  }, [])
+  const askGeminiWithFullText = async (question: string, paper: Paper) => { /* ... unchanged ... */ }
+  const askGeminiWithAbstract = async (question: string, paper: Paper) => { /* ... unchanged ... */ }
+  const handleSendMessage = async () => { /* ... unchanged ... */ }
+  const handleKeyPress = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage() } }
+  const getPdfUrl = (paper: Paper) => { if (paper.link.includes('arxiv.org/abs/')) { return paper.link.replace('/abs/', '/pdf/') + '.pdf' } return paper.link }
+  const handleCloseModal = useCallback(() => { setSelectedPaper(null); setShowChat(false); setShowPdfViewer(false); setChatMessages([]) }, [])
   
   const handleAddQuery = async () => {
     const trimmedQuery = newQuery.trim().toLowerCase();
     if (trimmedQuery && !researchQueries.includes(trimmedQuery)) {
         setResearchQueries(prev => [...prev, trimmedQuery]);
-        // The loadAllPapers will be re-run by its own useEffect due to query changes
         setNewQuery("");
     }
   }
@@ -760,21 +749,51 @@ export default function ResearchDashboard() {
     setPapers(prev => prev.filter(p => p.category !== queryToRemove))
   }
 
-  // --- NEW EFFECT FOR SCROLL LISTENING ---
+  const handleFindPaper = async () => {
+    if (!titleQuery.trim()) return;
+
+    setIsFindingPaper(true);
+    setFindPaperError(null);
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/find-paper', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: titleQuery }),
+      });
+
+      const result = await response.json();
+
+      if (result.success && result.paper) {
+        const foundPaper = {
+          ...result.paper,
+          institution: extractInstitution(result.paper.authors, result.paper.title, result.paper.summary),
+          source: extractSource(result.paper.link)
+        };
+        // Add the new paper to the top of the list
+        setPapers(prevPapers => [foundPaper, ...prevPapers]);
+        setShowQueryManager(false); // Close panel on success
+        setTitleQuery(""); // Clear input
+      } else {
+        setFindPaperError(result.error || 'Could not find the paper.');
+      }
+    } catch (error) {
+      setFindPaperError('An unexpected error occurred.');
+      console.error('Error finding paper:', error);
+    } finally {
+      setIsFindingPaper(false);
+    }
+  };
+
+
   useEffect(() => {
     const handleScroll = () => {
-      // Check if user is near the bottom of the page
       const isAtBottom = window.innerHeight + window.scrollY >= document.documentElement.offsetHeight - 500;
-      
-      if (isAtBottom && !loading && !isLoadingMore && hasMore) {
-        handleLoadMore();
-      }
+      if (isAtBottom && !loading && !isLoadingMore && hasMore) { handleLoadMore(); }
     };
-
     window.addEventListener('scroll', handleScroll);
-    
     return () => window.removeEventListener('scroll', handleScroll);
-  }, [loading, isLoadingMore, hasMore, handleLoadMore]); // Dependencies
+  }, [loading, isLoadingMore, hasMore, handleLoadMore]);
 
   if (loading) {
     return (
@@ -800,37 +819,6 @@ export default function ResearchDashboard() {
           </p>
         </div>
         
-        <div className="max-w-4xl mx-auto mb-12 p-6 bg-white rounded-2xl shadow-lg border-2 border-gray-200">
-          <h3 className="text-xl font-bold text-gray-900 mb-4">Manage Research Areas</h3>
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            {researchQueries.map(query => (
-              <div key={query} className="flex items-center bg-gray-200 text-gray-800 text-sm font-semibold px-3 py-1 rounded-full">
-                <span className="mr-2 capitalize">{query}</span>
-                <button onClick={() => handleRemoveQuery(query)} className="hover:text-red-500">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={newQuery}
-              onChange={(e) => setNewQuery(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleAddQuery()}
-              placeholder="Add a new research area (e.g., 'robotics')"
-              className="flex-grow p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <button
-              onClick={handleAddQuery}
-              className="bg-black hover:bg-gray-800 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center shadow-lg"
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              Add
-            </button>
-          </div>
-        </div>
-        
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {papers.map((paper, index) => (
             <PaperWidget
@@ -843,7 +831,6 @@ export default function ResearchDashboard() {
           ))}
         </div>
         
-        {/* --- NEW LOADING INDICATOR FOR SCROLLING --- */}
         {isLoadingMore && (
           <div className="text-center mt-12">
             <div className="inline-flex items-center">
@@ -881,6 +868,87 @@ export default function ResearchDashboard() {
           />
         )}
       </div>
+
+      <button
+        onClick={() => setShowQueryManager(true)}
+        className="fixed bottom-8 right-8 z-30 bg-black text-white p-4 rounded-full shadow-lg hover:bg-gray-800 transition-colors"
+        aria-label="Manage research topics"
+      >
+        <Settings className="w-6 h-6" />
+      </button>
+
+      {showQueryManager && (
+        <>
+          <div 
+            className="fixed inset-0 z-40"
+            onClick={() => setShowQueryManager(false)}
+          ></div>
+          <div className="fixed top-0 right-0 h-full w-96 bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300 ease-in-out transform translate-x-0">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-xl font-bold text-gray-900">Manage Content</h2>
+              <button onClick={() => setShowQueryManager(false)} className="p-2 rounded-full hover:bg-gray-100">
+                <X className="w-5 h-5 text-gray-900" />
+              </button>
+            </div>
+            
+            <div className="p-4 flex-grow overflow-y-auto">
+              <h3 className="font-bold text-gray-900 mb-2">Research Topics</h3>
+              <div className="space-y-2 mb-4">
+                {researchQueries.map(query => (
+                  <div key={query} className="flex items-center justify-between bg-gray-100 p-2 rounded-lg">
+                    <span className="capitalize font-medium text-gray-900">{query}</span>
+                    <button onClick={() => handleRemoveQuery(query)} className="text-gray-500 hover:text-red-500 p-1 rounded-full">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newQuery}
+                  onChange={(e) => setNewQuery(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleAddQuery()}
+                  placeholder="Add new topic..."
+                  className="flex-grow p-2 border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={handleAddQuery}
+                  className="bg-gray-800 hover:bg-black text-white px-4 py-2 rounded-lg font-bold flex items-center justify-center"
+                >
+                  <Plus className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 border-t bg-white">
+              <h3 className="font-bold text-gray-900 mb-2">Find a Specific Paper</h3>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={titleQuery}
+                  onChange={(e) => {
+                    setTitleQuery(e.target.value);
+                    setFindPaperError(null);
+                  }}
+                  onKeyPress={(e) => e.key === 'Enter' && handleFindPaper()}
+                  placeholder="Enter paper title..."
+                  className="flex-grow p-2 border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={isFindingPaper}
+                />
+                <button
+                  onClick={handleFindPaper}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold flex items-center justify-center disabled:bg-gray-400"
+                  disabled={isFindingPaper}
+                >
+                  {isFindingPaper ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                </button>
+              </div>
+              {findPaperError && <p className="text-red-600 text-sm mt-2">{findPaperError}</p>}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
