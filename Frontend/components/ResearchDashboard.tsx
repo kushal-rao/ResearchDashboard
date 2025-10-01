@@ -572,7 +572,7 @@ export default function ResearchDashboard() {
 
     try {
         console.log(`Downloading paper: ${paper.title}`);
-        const response = await fetch(`http://127.0.0.1:8000/download-paper/${paper.id}`, {
+        const response = await fetch(`http://Paper-Dashboard.us-east-2.elasticbeanstalk.com/download-paper/${paper.id}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -616,7 +616,7 @@ export default function ResearchDashboard() {
   const fetchPapersForQuery = useCallback(async (query: string, pageNum: number) => {
     try {
       console.log(`Fetching papers for: ${query}, page: ${pageNum}`)
-      const res = await fetch(`http://127.0.0.1:8000/search?query=${encodeURIComponent(query)}&max_results=10&page=${pageNum}`)
+      const res = await fetch(`http://Paper-Dashboard.us-east-2.elasticbeanstalk.com/search?query=${encodeURIComponent(query)}&max_results=10&page=${pageNum}`)
       if (!res.ok) {
         console.error(`HTTP error for ${query}: ${res.status}`)
         return []
@@ -756,7 +756,7 @@ export default function ResearchDashboard() {
     setFindPaperError(null);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/find-paper', {
+      const response = await fetch('http://Paper-Dashboard.us-east-2.elasticbeanstalk.com/find-paper', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: titleQuery }),
